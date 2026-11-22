@@ -14,7 +14,7 @@ export default function Home() {
 
   const cells = d
     ? [
-        ["在途水位", d.surface_ok ? (d.在途水位 ?? d.在途 ?? "—") : d.在途水位],
+        ["在途水位", d.在途水位],
         ["待取", d.待取],
         ["超期隔离", d.超期隔离],
         ["今日已取", d.已取],
@@ -42,12 +42,47 @@ export default function Home() {
         </div>
       </div>
       <div className="msg">{err}</div>
+      {d && d.转挂收口 && d.转挂收口.length > 0 && (
+        <section className="panel">
+          <h3>
+            转挂收口
+            <span className="consistency ok">{d.转挂收口.length} 项假转挂已回滚</span>
+          </h3>
+          <p className="hint">
+            读取时发现回执与现行店码分叉或存在双店独立占用计数，已按假转挂回滚；
+            失败回滚不留双店占用，现行店码仍是归属权威。
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>处置</th>
+                <th>票号/键</th>
+                <th>原店 → 新店</th>
+                <th>现行店码</th>
+              </tr>
+            </thead>
+            <tbody>
+              {d.转挂收口.map((t, i) => (
+                <tr key={`${t.kind}-${i}`}>
+                  <td className="warn-text">{t.kind}</td>
+                  <td>{t.ticket_no || t.key || t.receipt_id}</td>
+                  <td>{t.from_store ? `${t.from_store} → ${t.to_store}` : "—"}</td>
+                  <td>{t.store_code || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
       {d && (
         <section className="panel">
           <h3>
             门店在途分布
             <span className={`consistency ${d.水位一致 ? "ok" : "bad"}`}>
               {d.水位一致 ? "水位与重放一致" : "水位漂移！"}
+            </span>
+            <span className={`consistency ${d.转挂一致 ? "ok" : "bad"}`}>
+              {d.转挂一致 ? "转挂回执与店码互证" : "转挂撕裂！"}
             </span>
           </h3>
           <table>

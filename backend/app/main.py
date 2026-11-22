@@ -6,8 +6,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import PROJECT_NAME
 from app.routers import dashboard, gates, quarantine, settings, stores, tickets, transfer
 from app.seed import seed_if_empty
+from app.services import reconcile
 
 seed_if_empty()
+# 启动即收口历史假转挂：回执链与现行店码分叉、两侧双在途等，一律回滚假回执。
+reconcile.ensure_reconciled()
 
 app = FastAPI(title=PROJECT_NAME)
 app.add_middleware(

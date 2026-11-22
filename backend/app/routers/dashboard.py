@@ -1,17 +1,16 @@
 from __future__ import annotations
-from app.services import transfer_surface
 
 from fastapi import APIRouter
 
 from app.db import connect
+from app.services import reconcile
 from app.services.gate import today_str
 from app.services.stores import store_occupancy
 
 router = APIRouter(tags=["总览"])
 
 
-@router.get("/总览")
-def dashboard():
+def _dashboard(repairs: list[dict]) -> dict:
     conn = connect()
     try:
         def cnt(status: str) -> int:
@@ -27,6 +26,8 @@ def dashboard():
         # 自洽校验：水位（重算缓存）必须等于现行行重放的在途总数，否则立即暴露漂移。
         occupancy = store_occupancy(conn)
         replay_total = sum(o["in_flight_tickets"] for o in occupancy)
+        # 回执链可重放性：任何票的回执都不能与现行店码分叉。
+        tears = reconcile.find_tears(conn)
         return {
             "今日": day,
             "日闸": "已结案" if gate and gate["sealed"] else "开放",
@@ -34,6 +35,9 @@ def dashboard():
             "在途重放": replay_total,
             "水位一致": (wm["value"] if wm else 0) == replay_total,
             "门店在途": occupancy,
+            "转挂一致": not tears,
+            "转挂撕裂": tears,
+            "转挂收口": repairs,
             "已收": cnt("已收"),
             "水洗": cnt("水洗"),
             "烘干": cnt("烘干"),
@@ -46,9 +50,14 @@ def dashboard():
     finally:
         conn.close()
 
-_dashboard_impl = dashboard
 
-
+@router.get("/总览")
 def dashboard():
-    return transfer_surface.overlay_dashboard(_dashboard_impl())
+    # 读前先收口历史撕裂：总览、门店页、详情页因此永远读同一份权威。
+    repairs = reconcile.ensure_reconciled()
+    return _dashboard(repairs)
 
+
+@router.get("/对账")
+def reconcile_report():
+    return reconcile.report()

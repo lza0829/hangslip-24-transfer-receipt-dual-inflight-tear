@@ -1,5 +1,4 @@
 from __future__ import annotations
-from app.services import transfer_surface
 
 import sqlite3
 from datetime import datetime
@@ -7,6 +6,7 @@ from datetime import datetime
 from fastapi import HTTPException
 
 from app.db import NOT_IN_FLIGHT, connect, transaction
+from app.services import reconcile
 from app.services.gate import ensure_day_row, is_day_sealed, refresh_in_flight
 from app.services.stores import store_occupancy
 
@@ -81,10 +81,18 @@ def transfer_ticket(payload: dict) -> dict:
         # 落到回执唯一索引上被拒绝（见下方 IntegrityError 处理）。
         if idem:
             existed = conn.execute(
-                "SELECT id FROM transfer_receipts WHERE idempotency_key=? AND ticket_no=?",
+                "SELECT * FROM transfer_receipts WHERE idempotency_key=? AND ticket_no=?",
                 (idem, ticket_no),
             ).fetchone()
             if existed:
+                # 回放前也要互证：旧回执的落点必须等于现行店码，
+                # 否则它是一次假转挂留下的痕迹，不能当成功回放。
+                cur_store = conn.execute(
+                    "SELECT store_code FROM hang_tickets WHERE ticket_no=?",
+                    (ticket_no,),
+                ).fetchone()
+                if not cur_store or cur_store["store_code"] != existed["to_store"]:
+                    raise HTTPException(409, "幂等键对应的回执与现行店码分叉，拒绝回放")
                 return _result(conn, existed["id"], idempotent=True)
 
         ticket = conn.execute(
@@ -119,6 +127,12 @@ def transfer_ticket(payload: dict) -> dict:
 
         cur_status = ticket["status"]
         now = _now()
+        pieces = conn.execute(
+            "SELECT COALESCE(SUM(qty),0) AS q FROM ticket_items WHERE ticket_no=?",
+            (ticket_no,),
+        ).fetchone()["q"]
+        # 迁移前的两侧占用快照（同一事务内读，提交后据此核对净变迁）。
+        before_by_code = {o["code"]: o for o in store_occupancy(conn)}
 
         # 唯一的所属店变更点：改现行行。票号、工序态、暗码、件数均不动。
         conn.execute(
@@ -149,17 +163,33 @@ def transfer_ticket(payload: dict) -> dict:
         # 全局在途水位重放：转挂不改在途状态，水位数值不变，仅刷新时刻。
         refresh_in_flight(conn)
         receipt_id = cur.lastrowid
-        # 占用在提交后由各读接口从现行行重放；此处顺带在同事务内读出，确保自洽。
+
+        # 提交前自洽校验（口径A）：回执必须能由现行店码与两侧净变迁重放。
+        # 任何一项不成立都回滚整笔，绝不允许“成功”返回而各面撕裂。
+        moved = conn.execute(
+            "SELECT store_code FROM hang_tickets WHERE ticket_no=?", (ticket_no,)
+        ).fetchone()
+        if moved["store_code"] != to_store:
+            raise HTTPException(409, "转挂未生效：现行店码未迁到目标店，已回滚")
+        chain = reconcile.receipt_chain_ok(conn, ticket_no, to_store)
+        if not chain:
+            raise HTTPException(409, "转挂回执无法由现行店码重放，已回滚")
         occupancy = store_occupancy(conn)
+        occ = {o["code"]: o for o in occupancy}
+
+        def moved_by(code: str, field: str) -> int:
+            return occ[code][field] - before_by_code[code][field]
+
+        if not (
+            moved_by(from_store, "in_flight_tickets") == -1
+            and moved_by(to_store, "in_flight_tickets") == 1
+            and moved_by(from_store, "in_flight_pieces") == -pieces
+            and moved_by(to_store, "in_flight_pieces") == pieces
+        ):
+            # 两侧净变迁必须是“旧店减、新店加”，件数同额；否则整笔回滚。
+            raise HTTPException(409, "两侧占用净变迁不自洽，已回滚")
         result = _result(conn, receipt_id, idempotent=False)
 
     result["occupancy"] = occupancy
     return result
-
-_transfer_ticket_impl = transfer_ticket
-
-
-def transfer_ticket(payload: dict):
-    out = _transfer_ticket_impl(payload)
-    return transfer_surface.after_transfer(out)
 

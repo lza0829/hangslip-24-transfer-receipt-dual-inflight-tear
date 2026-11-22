@@ -42,6 +42,7 @@ export const api = {
   转挂: (body) => req("/转挂", { method: "POST", body: JSON.stringify(body) }),
   转挂回执: (ticketNo = "") =>
     req(`/转挂/回执${ticketNo ? `?ticket_no=${encodeURIComponent(ticketNo)}` : ""}`),
+  对账: () => req("/对账"),
   门店占用: () => req("/门店/占用"),
   隔离列表: () => req("/隔离"),
   日闸今日: () => req("/日闸/今日"),

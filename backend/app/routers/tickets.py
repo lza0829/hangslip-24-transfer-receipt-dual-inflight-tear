@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
+from app.services import reconcile
 from app.services import tickets as svc
 
 router = APIRouter(tags=["挂牌"])
@@ -47,11 +48,13 @@ def list_tickets(
     status: str | None = Query(None),
     store_code: str | None = Query(None),
 ):
+    reconcile.ensure_reconciled()
     return svc.list_tickets(status=status, store_code=store_code)
 
 
 @router.get("/挂牌/{ticket_no}")
 def get_ticket(ticket_no: str):
+    reconcile.ensure_reconciled()
     return svc.get_ticket(ticket_no)
 
 

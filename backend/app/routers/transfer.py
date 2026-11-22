@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
+from app.services import reconcile
 from app.services import transfer as svc
 
 router = APIRouter(tags=["跨店转挂"])
@@ -19,9 +20,12 @@ class TransferIn(BaseModel):
 
 @router.post("/转挂")
 def transfer(body: TransferIn):
+    # 先收口历史撕裂，再做本次转挂；本次自身在单事务内校验后才提交。
+    reconcile.ensure_reconciled()
     return svc.transfer_ticket(body.model_dump())
 
 
 @router.get("/转挂/回执")
 def list_receipts(ticket_no: str | None = Query(None)):
+    reconcile.ensure_reconciled()
     return svc.list_receipts(ticket_no)
